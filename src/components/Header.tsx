@@ -1,23 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Menu, X, ArrowUpRight, Phone, MessageSquare, ShieldCheck } from 'lucide-react';
+import { NavLink, Link, useLocation } from 'react-router-dom';
+import { Menu, X, ArrowUpRight } from 'lucide-react';
 import { GNS_CONFIG } from '../data/gnsData';
 
-interface HeaderProps {
-  onOpenAssistant: () => void;
-  onOpenVerificationNotes: () => void;
-}
-
-export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, onOpenVerificationNotes }) => {
-  const [isScrolled, setIsScrolled] = useState(false);
+export const Header: React.FC = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const location = useLocation();
 
+  // Close mobile menu on route change
   useEffect(() => {
-    const handleScroll = () => {
-      setIsScrolled(window.scrollY > 40);
-    };
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
 
   // Handle ESC key to close mobile menu
   useEffect(() => {
@@ -43,116 +36,76 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, onOpenVerificat
   }, [mobileMenuOpen]);
 
   const navLinks = [
-    { label: 'Home', href: '#hero' },
-    { label: 'Properties', href: '#properties' },
-    { label: 'About', href: '#about' },
-    { label: 'Our Team', href: '#team' },
-    { label: 'Contact', href: '#contact' },
+    { label: 'Home', to: '/' },
+    { label: 'Properties', to: '/properties' },
+    { label: 'About', to: '/about' },
+    { label: 'Our Team', to: '/team' },
+    { label: 'Contact', to: '/contact' },
   ];
 
   return (
-    <>
-      {/* Top Advisory Strip - Subtle and informational */}
-      <div className="bg-[#0E2338] text-white/80 text-xs py-2 px-4 md:px-8 border-b border-white/10 transition-colors">
-        <div className="max-w-[1320px] mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="text-white/60 tracking-wider uppercase text-[11px] font-medium">Dubai, UAE</span>
-            <span className="hidden sm:inline text-white/30">|</span>
-            <span className="hidden sm:inline text-white/70">Prime Residential & Off-Plan Advisory</span>
-          </div>
-          <div className="flex items-center gap-4 text-[11px]">
-            <a 
-              href={GNS_CONFIG.officeTelUrl} 
-              className="hidden md:flex items-center gap-1.5 text-white/80 hover:text-white transition-colors"
+    <header className="sticky top-0 z-40 h-[88px] w-full bg-[#FAF9F5] border-b border-[#E6E4DF] transition-colors">
+      <div className="max-w-[1320px] h-full mx-auto px-6 md:px-12 flex items-center justify-between gap-8">
+        {/* Brand Zone - Original GNS logo in true natural colors without dark artificial box */}
+        <Link
+          to="/"
+          className="flex items-center shrink-0 focus-visible:outline-2 focus-visible:outline-[#22417C] rounded-sm transition-opacity hover:opacity-90"
+          aria-label="GNS Real Estate LLC Home"
+        >
+          <img
+            src={GNS_CONFIG.logo}
+            alt="GNS Real Estate LLC"
+            className="h-10 md:h-12 w-auto object-contain"
+            loading="eager"
+          />
+        </Link>
+
+        {/* Navigation Zone (Desktop) */}
+        <nav className="hidden md:flex items-center gap-8 text-[14px] font-medium tracking-wide text-[#232220]">
+          {navLinks.map((link) => (
+            <NavLink
+              key={link.label}
+              to={link.to}
+              end={link.to === '/'}
+              className={({ isActive }) =>
+                `relative py-1 transition-colors whitespace-nowrap ${
+                  isActive
+                    ? 'text-[#22417C] font-semibold after:content-[""] after:absolute after:bottom-0 after:left-0 after:w-full after:h-[1.5px] after:bg-[#22417C]'
+                    : 'text-[#4A4844] hover:text-[#1A1918]'
+                }`
+              }
             >
-              <Phone className="w-3 h-3 text-[#BFA054]" />
-              <span>{GNS_CONFIG.officePhone}</span>
-            </a>
-            <button
-              onClick={onOpenVerificationNotes}
-              className="flex items-center gap-1.5 text-[#BFA054] hover:text-[#D4B66E] transition-colors cursor-pointer"
-              title="View verification sources and notes"
-            >
-              <ShieldCheck className="w-3.5 h-3.5" />
-              <span className="underline underline-offset-2">Preview Verification Notes</span>
-            </button>
-          </div>
+              {link.label}
+            </NavLink>
+          ))}
+        </nav>
+
+        {/* Action Zone (Right) */}
+        <div className="flex items-center gap-4 shrink-0">
+          <Link
+            to="/contact"
+            className="hidden sm:inline-flex items-center gap-1.5 px-6 py-2.5 text-xs font-semibold tracking-wider uppercase text-white bg-[#162E52] hover:bg-[#22417C] rounded-sm shadow-xs transition-colors whitespace-nowrap focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#162E52]"
+          >
+            <span>Enquire</span>
+            <ArrowUpRight className="w-3.5 h-3.5 text-[#DEBF84]" />
+          </Link>
+
+          {/* Mobile Menu Toggle Button */}
+          <button
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="md:hidden p-2 text-[#232220] hover:text-[#162E52] rounded-sm focus-visible:outline-2 focus-visible:outline-[#162E52]"
+            aria-label={mobileMenuOpen ? 'Close Menu' : 'Open Menu'}
+            aria-expanded={mobileMenuOpen}
+          >
+            {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+          </button>
         </div>
       </div>
 
-      {/* Main Navigation Header */}
-      <header
-        className={`sticky top-0 z-40 transition-all duration-300 ${
-          isScrolled
-            ? 'bg-[#FAF9F5]/95 backdrop-blur-md shadow-xs border-b border-[#E6E4DF] py-3.5'
-            : 'bg-[#FAF9F5] md:bg-transparent md:backdrop-blur-none border-b border-[#E6E4DF]/60 py-4.5'
-        }`}
-      >
-        <div className="max-w-[1320px] mx-auto px-6 md:px-12 flex items-center justify-between gap-8">
-          {/* Brand Logo Zone - Clean backing for contrast */}
-          <a
-            href="#hero"
-            className="flex items-center gap-3 group shrink-0 focus-visible:outline-2 focus-visible:outline-[#BFA054] rounded-sm"
-            aria-label="GNS Real Estate LLC Home"
-          >
-            <div className="bg-[#0E2338] px-3 py-1.5 rounded-sm flex items-center shadow-xs border border-[#0E2338]/20 transition-transform group-hover:scale-[1.02]">
-              <img
-                src={GNS_CONFIG.logo}
-                alt="GNS Real Estate LLC Logo"
-                className="h-7 md:h-8 w-auto object-contain"
-                loading="eager"
-              />
-            </div>
-          </a>
-
-          {/* Nav Links Zone (Desktop) */}
-          <nav className="hidden md:flex items-center gap-8 text-[14px] font-medium tracking-wide text-[#232220]">
-            {navLinks.map((link) => (
-              <a
-                key={link.label}
-                href={link.href}
-                className="relative py-1 text-[#2B2A28] hover:text-[#0E2338] transition-colors whitespace-nowrap after:content-[''] after:absolute after:bottom-0 after:left-0 after:w-0 after:h-[1.5px] after:bg-[#BFA054] hover:after:w-full after:transition-all after:duration-300"
-              >
-                {link.label}
-              </a>
-            ))}
-          </nav>
-
-          {/* Action Zone (Right) */}
-          <div className="flex items-center gap-3 shrink-0">
-            <button
-              onClick={onOpenAssistant}
-              className="hidden lg:inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-[#0E2338] bg-[#F0EEE9] hover:bg-[#E7E4DC] border border-[#DCD9D3] rounded-sm transition-colors cursor-pointer"
-            >
-              <MessageSquare className="w-3.5 h-3.5 text-[#BFA054]" />
-              <span>Ask GNS</span>
-            </button>
-
-            <a
-              href="#contact"
-              className="inline-flex items-center gap-1.5 px-5 py-2.5 text-xs font-medium tracking-wider uppercase text-white bg-[#0E2338] hover:bg-[#153452] rounded-sm shadow-xs transition-colors whitespace-nowrap focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0E2338]"
-            >
-              <span>Enquire</span>
-              <ArrowUpRight className="w-3.5 h-3.5 text-[#BFA054]" />
-            </a>
-
-            {/* Mobile Menu Toggle Button */}
-            <button
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="md:hidden p-2 text-[#232220] hover:text-[#0E2338] rounded-sm focus-visible:outline-2 focus-visible:outline-[#0E2338]"
-              aria-label={mobileMenuOpen ? 'Close Menu' : 'Open Menu'}
-              aria-expanded={mobileMenuOpen}
-            >
-              {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* Mobile Drawer / Overlay */}
+      {/* Mobile Drawer */}
       {mobileMenuOpen && (
         <div
-          className="fixed inset-0 z-50 bg-[#0E2338]/60 backdrop-blur-xs md:hidden transition-opacity"
+          className="fixed inset-0 z-50 bg-[#0E1B28]/50 backdrop-blur-xs md:hidden transition-opacity"
           onClick={() => setMobileMenuOpen(false)}
         >
           <div
@@ -165,16 +118,14 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, onOpenVerificat
             <div>
               {/* Header inside drawer */}
               <div className="flex items-center justify-between pb-6 border-b border-[#E6E4DF]">
-                <div className="bg-[#0E2338] px-3 py-1.5 rounded-sm">
-                  <img
-                    src={GNS_CONFIG.logo}
-                    alt="GNS Real Estate LLC"
-                    className="h-6 w-auto object-contain"
-                  />
-                </div>
+                <img
+                  src={GNS_CONFIG.logo}
+                  alt="GNS Real Estate LLC"
+                  className="h-9 w-auto object-contain"
+                />
                 <button
                   onClick={() => setMobileMenuOpen(false)}
-                  className="p-1.5 text-[#232220] hover:text-[#0E2338] rounded-sm focus-visible:outline-2"
+                  className="p-1.5 text-[#232220] hover:text-[#162E52] rounded-sm"
                   aria-label="Close menu"
                 >
                   <X className="w-5 h-5" />
@@ -184,54 +135,40 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, onOpenVerificat
               {/* Navigation links */}
               <nav className="flex flex-col gap-1 py-6">
                 {navLinks.map((link) => (
-                  <a
+                  <NavLink
                     key={link.label}
-                    href={link.href}
-                    onClick={() => setMobileMenuOpen(false)}
-                    className="px-3 py-3 text-base font-medium text-[#232220] hover:text-[#0E2338] hover:bg-[#F2EFE9] rounded-sm transition-colors"
+                    to={link.to}
+                    end={link.to === '/'}
+                    className={({ isActive }) =>
+                      `px-3.5 py-3 text-base font-medium rounded-sm transition-colors ${
+                        isActive
+                          ? 'bg-[#EAE7DF] text-[#162E52] font-semibold'
+                          : 'text-[#232220] hover:bg-[#F2EFE9] hover:text-[#162E52]'
+                      }`
+                    }
                   >
                     {link.label}
-                  </a>
+                  </NavLink>
                 ))}
               </nav>
-
-              <div className="pt-2 border-t border-[#E6E4DF]">
-                <button
-                  onClick={() => {
-                    setMobileMenuOpen(false);
-                    onOpenAssistant();
-                  }}
-                  className="w-full flex items-center justify-between px-3 py-3 text-sm font-medium text-[#0E2338] bg-[#F0EEE9] rounded-sm"
-                >
-                  <span className="flex items-center gap-2">
-                    <MessageSquare className="w-4 h-4 text-[#BFA054]" />
-                    <span>Launch Enquiry Assistant</span>
-                  </span>
-                  <ArrowUpRight className="w-4 h-4 text-[#6B6864]" />
-                </button>
-              </div>
             </div>
 
-            {/* Bottom contact info inside mobile drawer */}
+            {/* Bottom action inside mobile drawer */}
             <div className="pt-6 border-t border-[#E6E4DF] space-y-3">
-              <a
-                href={GNS_CONFIG.whatsappUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-medium uppercase tracking-wider text-white bg-[#0E2338] hover:bg-[#153452] rounded-sm"
+              <Link
+                to="/contact"
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 text-xs font-semibold uppercase tracking-wider text-white bg-[#162E52] hover:bg-[#22417C] rounded-sm"
               >
-                <span>WhatsApp Advisor</span>
-                <ArrowUpRight className="w-3.5 h-3.5 text-[#BFA054]" />
-              </a>
-
-              <div className="text-[12px] text-[#6B6864] space-y-1">
-                <div>Office: {GNS_CONFIG.officePhone}</div>
-                <div>Email: {GNS_CONFIG.generalEmail}</div>
+                <span>Enquire With Our Team</span>
+                <ArrowUpRight className="w-3.5 h-3.5 text-[#DEBF84]" />
+              </Link>
+              <div className="text-[12px] text-[#6E6B66] text-center pt-1">
+                Office: {GNS_CONFIG.officePhone}
               </div>
             </div>
           </div>
         </div>
       )}
-    </>
+    </header>
   );
 };

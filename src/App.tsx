@@ -1,79 +1,67 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { Header } from './components/Header';
-import { Hero } from './components/Hero';
-import { Introduction } from './components/Introduction';
-import { PropertyCollections } from './components/PropertyCollections';
-import { SelectedProperties } from './components/SelectedProperties';
-import { AboutGNS } from './components/AboutGNS';
-import { TeamSection } from './components/TeamSection';
-import { ContactSection } from './components/ContactSection';
 import { Footer } from './components/Footer';
 import { EnquiryAssistant } from './components/EnquiryAssistant';
-import { VerificationModal } from './components/VerificationModal';
+import { HomePage } from './pages/HomePage';
+import { PropertiesPage } from './pages/PropertiesPage';
+import { PropertyDetailPage } from './pages/PropertyDetailPage';
+import { AboutPage } from './pages/AboutPage';
+import { TeamPage } from './pages/TeamPage';
+import { ContactPage } from './pages/ContactPage';
 
-export default function App() {
+// Scroll to top helper on route change
+function ScrollToTop() {
+  const { pathname } = useLocation();
+
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [pathname]);
+
+  return null;
+}
+
+function MainLayout() {
   const [assistantOpen, setAssistantOpen] = useState(false);
-  const [verificationModalOpen, setVerificationModalOpen] = useState(false);
-  const [propertyCategory, setPropertyCategory] = useState<'All' | 'Apartments' | 'Villas & Townhouses' | 'Off-plan'>('All');
-
-  const handleSelectCollectionCategory = (cat: 'Apartments' | 'Villas & Townhouses' | 'Off-plan') => {
-    setPropertyCategory(cat);
-    const el = document.getElementById('properties');
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth' });
-    }
-  };
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#FAF9F5] text-[#202020] font-sans antialiased selection:bg-[#BFA054]/20 selection:text-[#0E2338]">
-      {/* Primary Header */}
-      <Header
-        onOpenAssistant={() => setAssistantOpen(true)}
-        onOpenVerificationNotes={() => setVerificationModalOpen(true)}
-      />
+    <div className="min-h-screen flex flex-col bg-[#FAF9F5] text-[#202020] font-sans antialiased selection:bg-[#BFA054]/20 selection:text-[#162E52]">
+      <ScrollToTop />
 
-      {/* Main Content Sections */}
+      {/* Global Clean 88px Header */}
+      <Header />
+
+      {/* Routed Main Views */}
       <main className="flex-1">
-        {/* 1. Cinematic Hero */}
-        <Hero />
-
-        {/* 2. Editorial Introduction */}
-        <Introduction />
-
-        {/* 3. Property Collections (Residential & Investment) */}
-        <PropertyCollections onSelectCategory={handleSelectCollectionCategory} />
-
-        {/* 4. Selected Properties with Working Filters & Detail Modal */}
-        <SelectedProperties initialFilter={propertyCategory} />
-
-        {/* 5. About GNS, 3-Step Client Journey & Developer Partners */}
-        <AboutGNS />
-
-        {/* 6. Meet the Verified Team */}
-        <TeamSection />
-
-        {/* 7. Contact / Requirement Handoff Section */}
-        <ContactSection />
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/properties" element={<PropertiesPage />} />
+          <Route path="/properties/:slug" element={<PropertyDetailPage />} />
+          <Route path="/about" element={<AboutPage />} />
+          <Route path="/team" element={<TeamPage />} />
+          <Route path="/contact" element={<ContactPage />} />
+          {/* Catch-all redirect to Home */}
+          <Route path="*" element={<HomePage />} />
+        </Routes>
       </main>
 
-      {/* Footer */}
-      <Footer
-        onOpenVerificationNotes={() => setVerificationModalOpen(true)}
-        onOpenAssistant={() => setAssistantOpen(true)}
-      />
+      {/* Global Clean Footer */}
+      <Footer />
 
-      {/* Discreet Enquiry Assistant (Ask GNS) */}
+      {/* Discreet Enquiry Assistant ("Ask GNS") at bottom-right */}
       <EnquiryAssistant
         isOpen={assistantOpen}
         onToggle={() => setAssistantOpen(!assistantOpen)}
         onClose={() => setAssistantOpen(false)}
       />
-
-      {/* Client Verification & Authenticity Checklist Modal */}
-      <VerificationModal
-        isOpen={verificationModalOpen}
-        onClose={() => setVerificationModalOpen(false)}
-      />
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <MainLayout />
+    </BrowserRouter>
   );
 }
