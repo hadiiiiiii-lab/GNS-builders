@@ -1,0 +1,2 @@
+Official website-published assets, unaltered. Largest versions explicitly supplied by profile srcsets; not necessarily camera originals. Logo source: https://gnsre.com/wp-content/uploads/2025/02/Logo-UAE-GNS-Real-Estate-LLC.png
+Vijay Kumar: CEO on official profile; contact page calls him Vijay Sakhija. Founder title not verified. Sharjeel has legacy URL sagar-kumar: displayed name used, confirm with client. Eight homepage-linked profiles are not a guaranteed complete current staff roster. Camera RAW and vector logo not verified. Use these photos instead of older thumbnails.

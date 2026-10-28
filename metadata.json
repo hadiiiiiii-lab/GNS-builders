@@ -1,0 +1,6 @@
+{
+  "name": "GNS Real Estate LLC | Dubai Property Preview",
+  "description": "Official preview for GNS Real Estate LLC, Dubai. Explore residential, off-plan investment properties, meet verified team advisors, and access the discreet enquiry assistant.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
