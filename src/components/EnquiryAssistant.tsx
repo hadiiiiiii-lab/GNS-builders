@@ -17,12 +17,15 @@ import {
   Pause,
   CheckCircle2,
   PhoneCall,
+  PhoneOff,
   Radio,
   RefreshCw,
-  Info,
+  HandMetal,
+  StopCircle,
 } from 'lucide-react';
 import { useDemoContext } from '../context/DemoContext';
 import { askAiReceptionist } from '../services/aiReceptionistService';
+import { VoiceAgentEngine, CallStatus, CallMessage } from '../services/voiceAgentEngine';
 import { ChatMessage } from '../types/demo';
 import { PropertyItem } from '../data/gnsData';
 
@@ -32,19 +35,8 @@ interface EnquiryAssistantProps {
   onClose: () => void;
 }
 
-export type VoiceAgentState =
-  | 'idle'
-  | 'requesting_permission'
-  | 'listening'
-  | 'processing'
-  | 'speaking'
-  | 'permission_denied'
-  | 'unsupported'
-  | 'error';
-
 export interface VoiceErrorDetails {
   stage: 'capture' | 'recognition' | 'network' | 'output';
-  code: string;
   title: string;
   message: string;
   suggestion?: string;
@@ -61,18 +53,20 @@ const SAMPLE_CALL_STEPS = [
   { role: 'assistant', text: "Thank you Sarah. I have recorded your viewing request for Oria at Dubai Creek Harbour for Thursday at 4:00 PM. A GNS property advisor will reach out to confirm your slot.", delay: 3200 },
 ];
 
-const SAMPLE_RESPONSES = [
-  { label: '2-Bed in Creek Harbour', query: 'Show me two-bedroom apartments in Dubai Creek Harbour' },
-  { label: 'Town Square Villas', query: 'What luxury villas or townhouses are in Town Square under 3M?' },
-  { label: 'Schedule Oria Viewing', query: 'I want to schedule an in-person viewing for Oria' },
-  { label: 'Rental Lease Terms', query: 'What are Dubai rental lease payment terms?' },
-  { label: 'Voice Receptionist Status', query: 'Voice agent status: is the receptionist active and ready?' },
+const ONE_CLICK_TESTS = [
+  { label: '2-Bed in Creek Harbour', query: 'Show me two-bedroom apartments in Dubai Creek Harbour', desc: 'Waterfront inquiry' },
+  { label: 'Town Square 3-Bed Villas', query: 'What villas or townhouses are available in Town Square?', desc: 'Family investment' },
+  { label: 'Interrupt & Switch to Rent', query: 'Wait, stop! Actually I want to rent instead, what are annual cheque terms?', desc: 'Interruption test' },
+  { label: 'Urdu/Hindi: Voice Agent Check', query: 'Voice agent check: kya aap online aur active hain?', desc: 'Regional voice & language' },
+  { label: 'Schedule Oria Viewing', query: 'I would like to schedule an in-person viewing for Oria', desc: 'Viewing request' },
 ];
 
 export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onToggle, onClose }) => {
   const { properties, openViewingModal, logConversation } = useDemoContext();
 
   const [activeTab, setActiveTab] = useState<'chat' | 'voice'>('chat');
+
+  // Text Chat State
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'welcome-1',
@@ -86,178 +80,244 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
   const [isLoading, setIsLoading] = useState(false);
   const [criteria, setCriteria] = useState<Record<string, string>>({});
 
-  // Single source-of-truth State Machine
-  const [voiceState, setVoiceState] = useState<VoiceAgentState>('idle');
+  // Real-Time Voice Agent State
+  const [callStatus, setCallStatus] = useState<CallStatus>('idle');
   const [errorDetails, setErrorDetails] = useState<VoiceErrorDetails | null>(null);
-  const [voiceTranscript, setVoiceTranscript] = useState('');
-  const [currentlySpeakingText, setCurrentlySpeakingText] = useState<string | null>(null);
-  const [testOutputSuccess, setTestOutputSuccess] = useState(false);
+  const [callMessages, setCallMessages] = useState<CallMessage[]>([]);
+  const [interimTranscript, setInterimTranscript] = useState('');
+  const [inputAudioLevel, setInputAudioLevel] = useState(0);
+  const [outputAudioLevel, setOutputAudioLevel] = useState(0);
+  const [callDuration, setCallDuration] = useState(0);
+  const [isMuted, setIsMuted] = useState(false);
+  const [interruptedNotice, setInterruptedNotice] = useState(false);
+  const [suggestedProperties, setSuggestedProperties] = useState<PropertyItem[]>([]);
+  const [speakerTestSuccess, setSpeakerTestSuccess] = useState(false);
 
-  // Simulation State
+  // Scripted Call Simulation State
   const [simPlaying, setSimPlaying] = useState(false);
   const [simStepIndex, setSimStepIndex] = useState(0);
   const [simTranscript, setSimTranscript] = useState<Array<{ role: string; text: string; time: string }>>([]);
 
   // Lifecycle Refs
+  const engineRef = useRef<VoiceAgentEngine | null>(null);
+  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const simTimerRef = useRef<NodeJS.Timeout | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<any>(null);
-  const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const permissionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const callEndRef = useRef<HTMLDivElement>(null);
 
-  // Check if embedded in iframe
   const isEmbedded = typeof window !== 'undefined' && window.self !== window.top;
   const standaloneUrl = typeof window !== 'undefined' ? window.location.href : '';
 
-  // Auto scroll chat
+  // Auto-scroll chat
   useEffect(() => {
     if (activeTab === 'chat' && isOpen) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [messages, activeTab, isOpen, isLoading]);
 
-  // Clean up media stream tracks
-  const cleanupMediaStream = useCallback(() => {
-    if (mediaStreamRef.current) {
-      try {
-        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      } catch {}
-      mediaStreamRef.current = null;
+  // Auto-scroll call transcript
+  useEffect(() => {
+    if (activeTab === 'voice' && isOpen) {
+      callEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, []);
+  }, [callMessages, interimTranscript, activeTab, isOpen]);
 
-  // Stop speaking
-  const stopSpeaking = useCallback(() => {
+  // Call duration timer
+  useEffect(() => {
+    const isCallActive =
+      callStatus === 'connected' ||
+      callStatus === 'listening' ||
+      callStatus === 'processing' ||
+      callStatus === 'speaking' ||
+      callStatus === 'interrupted';
+
+    if (isCallActive) {
+      if (!timerIntervalRef.current) {
+        timerIntervalRef.current = setInterval(() => {
+          setCallDuration((prev) => prev + 1);
+        }, 1000);
+      }
+    } else {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
+      if (callStatus === 'idle') {
+        setCallDuration(0);
+      }
+    }
+
+    return () => {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
+    };
+  }, [callStatus]);
+
+  // Initialize VoiceAgentEngine
+  const getOrCreateEngine = useCallback(() => {
+    if (!engineRef.current) {
+      engineRef.current = new VoiceAgentEngine(
+        {
+          onStatusChange: (status) => setCallStatus(status),
+          onAudioLevels: (inLevel, outLevel) => {
+            setInputAudioLevel(inLevel);
+            setOutputAudioLevel(outLevel);
+          },
+          onTranscript: (interim) => setInterimTranscript(interim),
+          onNewMessage: (msg) => {
+            setCallMessages((prev) => [...prev, msg]);
+          },
+          onInterrupted: () => {
+            setInterruptedNotice(true);
+            setTimeout(() => setInterruptedNotice(false), 2000);
+          },
+          onError: (err) => {
+            setErrorDetails({
+              stage: err.stage as any,
+              title: err.title,
+              message: err.message,
+              isIframeRestricted: err.isIframeRestricted,
+            });
+          },
+          onPropertiesMatched: (props) => {
+            setSuggestedProperties(props);
+          },
+        },
+        properties
+      );
+    } else {
+      engineRef.current.updateProperties(properties);
+    }
+    return engineRef.current;
+  }, [properties]);
+
+  // Stop everything safely
+  const stopAllVoiceSessions = useCallback(() => {
+    if (engineRef.current) {
+      engineRef.current.endCall();
+    }
+    if (simTimerRef.current) {
+      clearTimeout(simTimerRef.current);
+      simTimerRef.current = null;
+    }
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       try {
         window.speechSynthesis.cancel();
       } catch {}
     }
-    activeUtteranceRef.current = null;
-    setCurrentlySpeakingText(null);
-    if (voiceState === 'speaking') {
-      setVoiceState('idle');
-    }
-  }, [voiceState]);
+    setSimPlaying(false);
+    setInputAudioLevel(0);
+    setOutputAudioLevel(0);
+  }, []);
 
-  // Full audio cleanup
-  const cleanupAllAudio = useCallback(() => {
-    cleanupMediaStream();
-    if (permissionTimeoutRef.current) {
-      clearTimeout(permissionTimeoutRef.current);
-      permissionTimeoutRef.current = null;
-    }
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.abort();
-      } catch {}
-    }
-    stopSpeaking();
-  }, [cleanupMediaStream, stopSpeaking]);
-
-  // Clean up on unmount or modal close
+  // Clean up when modal closes or unmounts
   useEffect(() => {
     if (!isOpen) {
-      cleanupAllAudio();
-      if (voiceState === 'requesting_permission' || voiceState === 'listening' || voiceState === 'speaking') {
-        setVoiceState('idle');
-        setVoiceTranscript('');
-      }
+      stopAllVoiceSessions();
+      setCallStatus('idle');
+      setInterimTranscript('');
+      setErrorDetails(null);
     }
-  }, [isOpen, cleanupAllAudio, voiceState]);
+  }, [isOpen, stopAllVoiceSessions]);
 
-  // Speech Synthesis helper
-  const speakText = useCallback(
-    (text: string, onEnd?: () => void) => {
-      if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-        setErrorDetails({
-          stage: 'output',
-          code: 'synthesis_unsupported',
-          title: 'Speech Output Unsupported',
-          message: 'Speech synthesis is not supported by your browser.',
-        });
-        setVoiceState('error');
-        return;
-      }
-
-      try {
-        window.speechSynthesis.cancel();
-        if (window.speechSynthesis.paused) {
-          window.speechSynthesis.resume();
-        }
-
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.rate = 1.0;
-        utterance.pitch = 1.0;
-
-        const voices = window.speechSynthesis.getVoices();
-        if (voices.length > 0) {
-          const preferredVoice =
-            voices.find(
-              (v) =>
-                v.lang.startsWith('en') &&
-                (v.name.includes('Natural') ||
-                  v.name.includes('Google') ||
-                  v.name.includes('Samantha') ||
-                  v.name.includes('Daniel') ||
-                  v.name.includes('English'))
-            ) || voices.find((v) => v.lang.startsWith('en')) || voices[0];
-
-          if (preferredVoice) {
-            utterance.voice = preferredVoice;
-          }
-        }
-
-        utterance.onstart = () => {
-          setVoiceState('speaking');
-          setCurrentlySpeakingText(text);
-        };
-
-        utterance.onend = () => {
-          activeUtteranceRef.current = null;
-          setCurrentlySpeakingText(null);
-          setVoiceState('idle');
-          onEnd?.();
-        };
-
-        utterance.onerror = (e) => {
-          console.warn('SpeechSynthesis error:', e);
-          activeUtteranceRef.current = null;
-          setCurrentlySpeakingText(null);
-          setVoiceState('idle');
-          onEnd?.();
-        };
-
-        activeUtteranceRef.current = utterance;
-        window.speechSynthesis.speak(utterance);
-      } catch (err) {
-        console.warn('Error in speakText:', err);
-        setVoiceState('idle');
-        setCurrentlySpeakingText(null);
-      }
-    },
-    []
-  );
-
-  // Test speaker voice output (Diagnostics stage 4)
-  const testSpeakerOutput = () => {
-    cleanupAllAudio();
+  // Start hands-free voice call
+  const handleStartCall = async () => {
     setErrorDetails(null);
-    const greeting = 'Hello, this is the GNS Real Estate voice assistant in Dubai. Voice output is active and operational.';
-    speakText(greeting, () => {
-      setTestOutputSuccess(true);
-      setTimeout(() => setTestOutputSuccess(false), 4000);
-    });
+    setCallMessages([]);
+    setSuggestedProperties([]);
+    setCallDuration(0);
+    setIsMuted(false);
+
+    const engine = getOrCreateEngine();
+    await engine.startCall();
   };
 
-  // Main Handle User Send
+  // End voice call
+  const handleEndCall = () => {
+    stopAllVoiceSessions();
+  };
+
+  // Mute toggle
+  const handleToggleMute = () => {
+    if (engineRef.current) {
+      const muted = engineRef.current.toggleMute();
+      setIsMuted(muted);
+    }
+  };
+
+  // Manual interrupt button
+  const handleInterruptAgent = () => {
+    if (engineRef.current) {
+      engineRef.current.handleInterruption();
+    }
+  };
+
+  // Test Speaker Audio
+  const handleTestSpeaker = () => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      setErrorDetails({
+        stage: 'output',
+        title: 'Speaker Output Unsupported',
+        message: 'Speech synthesis is not supported in this browser.',
+      });
+      return;
+    }
+
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(
+        'Assalamu alaikum and hello. This is GNS Real Estate Dubai. Audio output and speech synthesis are fully active.'
+      );
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+
+      const voices = window.speechSynthesis.getVoices();
+      const preferredVoice =
+        voices.find((v) => v.lang === 'en-IN' || v.name.toLowerCase().includes('india')) ||
+        voices.find((v) => v.lang.startsWith('en') && (v.name.includes('Natural') || v.name.includes('Google'))) ||
+        voices[0];
+
+      if (preferredVoice) {
+        utterance.voice = preferredVoice;
+      }
+
+      utterance.onend = () => {
+        setSpeakerTestSuccess(true);
+        setTimeout(() => setSpeakerTestSuccess(false), 3500);
+      };
+
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      // ignore
+    }
+  };
+
+  // 1-Click Interactive Test Prompt (handles voice response without requiring mic hardware)
+  const triggerOneClickTest = async (query: string) => {
+    setErrorDetails(null);
+
+    // If call is not currently active, initialize a connected session
+    if (
+      callStatus !== 'connected' &&
+      callStatus !== 'listening' &&
+      callStatus !== 'speaking' &&
+      callStatus !== 'processing'
+    ) {
+      setCallStatus('connected');
+    }
+
+    const engine = getOrCreateEngine();
+    await engine.handleUserSpokenSentence(query);
+  };
+
+  // Chat send message
   const handleUserSend = async (text: string) => {
     if (!text.trim() || isLoading) return;
 
     const userText = text.trim();
     setInputMessage('');
-    setErrorDetails(null);
 
     const newMsg: ChatMessage = {
       id: `msg-${Date.now()}`,
@@ -292,15 +352,9 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
       };
 
       setMessages((prev) => [...prev, botMsg]);
-
-      // If in voice tab, speak answer and transition to speaking
-      if (activeTab === 'voice') {
-        speakText(res.reply);
-      } else {
-        setVoiceState('idle');
-      }
     } catch {
-      const fallbackReply = 'Our team will be delighted to guide you with current listings. Would you like to schedule an in-person or virtual viewing?';
+      const fallbackReply =
+        'Our team will be delighted to guide you with current listings. Would you like to schedule an in-person or virtual viewing?';
       setMessages((prev) => [
         ...prev,
         {
@@ -311,247 +365,15 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
           quickChoices: ['Book a Viewing', 'View Portfolio', 'Speak to an Advisor'],
         },
       ]);
-      if (activeTab === 'voice') {
-        speakText(fallbackReply);
-      } else {
-        setVoiceState('idle');
-      }
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Start Mic: Explicit click only, strictly sequential states
-  const handleStartMic = async () => {
-    // Prevent duplicate clicks while already requesting or processing
-    if (voiceState === 'requesting_permission' || voiceState === 'processing') {
-      return;
-    }
-
-    cleanupAllAudio();
-    setErrorDetails(null);
-    setVoiceTranscript('');
-
-    // Check browser compatibility for audio capture & recognition
-    const SpeechRecognition =
-      typeof window !== 'undefined' &&
-      ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
-
-    if (!SpeechRecognition || !navigator.mediaDevices?.getUserMedia) {
-      setVoiceState('unsupported');
-      setErrorDetails({
-        stage: 'recognition',
-        code: 'unsupported_browser',
-        title: 'Browser Voice Recognition Unsupported',
-        message: 'Your browser environment does not support Web Speech Recognition or microphone audio capture.',
-        suggestion: 'Please use the typed chat assistant or test sample audio responses below.',
-      });
-      return;
-    }
-
-    // Enter requesting_permission state
-    setVoiceState('requesting_permission');
-
-    // 10-second timeout guard to prevent endless requesting state
-    permissionTimeoutRef.current = setTimeout(() => {
-      cleanupMediaStream();
-      setVoiceState('error');
-      setErrorDetails({
-        stage: 'capture',
-        code: 'permission_timeout',
-        title: 'Microphone Request Timed Out',
-        message: 'The browser permission prompt did not receive a response within 10 seconds.',
-        suggestion: 'Please click "Start Mic" again and check for a permission prompt in your address bar.',
-        isIframeRestricted: isEmbedded,
-      });
-    }, 10000);
-
-    try {
-      // Stage 1: Explicit Microphone Hardware & Permission Capture
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      // Permission granted! Clear timeout
-      if (permissionTimeoutRef.current) {
-        clearTimeout(permissionTimeoutRef.current);
-        permissionTimeoutRef.current = null;
-      }
-      mediaStreamRef.current = stream;
-
-      // Stage 2: Initialize Speech-to-Text Recognition
-      const recognition = new SpeechRecognition();
-      recognition.continuous = false;
-      recognition.interimResults = true;
-      recognition.lang = 'en-US';
-
-      recognition.onstart = () => {
-        setVoiceState('listening');
-        setVoiceTranscript('');
-      };
-
-      recognition.onresult = (event: any) => {
-        let fullTranscript = '';
-        let isFinal = false;
-
-        for (let i = 0; i < event.results.length; ++i) {
-          fullTranscript += event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            isFinal = true;
-          }
-        }
-
-        if (fullTranscript.trim()) {
-          setVoiceTranscript(fullTranscript);
-        }
-
-        if (isFinal && fullTranscript.trim()) {
-          cleanupMediaStream();
-          try {
-            recognition.stop();
-          } catch {}
-          setVoiceState('processing');
-          handleUserSend(fullTranscript.trim());
-        }
-      };
-
-      recognition.onerror = (event: any) => {
-        console.warn('SpeechRecognition error:', event.error);
-        cleanupMediaStream();
-
-        if (event.error === 'not-allowed') {
-          setVoiceState('permission_denied');
-          setErrorDetails({
-            stage: 'recognition',
-            code: 'recognition_not_allowed',
-            title: 'Speech Recognition Denied',
-            message: isEmbedded
-              ? 'Speech recognition service was denied by the embedded preview container permissions.'
-              : 'Speech recognition access was blocked in browser settings.',
-            suggestion: isEmbedded
-              ? 'Embedded previews may restrict microphone access via permissions policy. Open the standalone preview URL to grant full access.'
-              : 'Click the site settings icon in your address bar and enable microphone permissions.',
-            isIframeRestricted: isEmbedded,
-          });
-        } else if (event.error === 'no-speech') {
-          setVoiceState('error');
-          setErrorDetails({
-            stage: 'recognition',
-            code: 'no_speech',
-            title: 'No Speech Detected',
-            message: 'No voice audio was detected during the listening period.',
-            suggestion: 'Tap "Start Mic" again and speak directly into your microphone.',
-          });
-        } else if (event.error === 'audio-capture') {
-          setVoiceState('error');
-          setErrorDetails({
-            stage: 'capture',
-            code: 'audio_capture_failed',
-            title: 'Microphone Audio Capture Failed',
-            message: 'Audio input hardware failed to deliver sound to the speech engine.',
-            suggestion: 'Ensure your microphone is properly plugged in and not muted.',
-          });
-        } else if (event.error === 'network') {
-          setVoiceState('error');
-          setErrorDetails({
-            stage: 'network',
-            code: 'network_timeout',
-            title: 'Speech Network Service Error',
-            message: 'The browser could not connect to the speech recognition service.',
-            suggestion: 'Check your internet connection or use typed chat.',
-          });
-        } else if (event.error !== 'aborted') {
-          setVoiceState('error');
-          setErrorDetails({
-            stage: 'recognition',
-            code: event.error || 'speech_error',
-            title: 'Speech Recognition Error',
-            message: `Speech recognition encountered an issue: ${event.error}`,
-            suggestion: 'Please try speaking again or use typed chat.',
-          });
-        }
-      };
-
-      recognition.onend = () => {
-        cleanupMediaStream();
-        // If it ended without an error or processing, return to idle
-        setVoiceState((prev) => (prev === 'listening' ? 'idle' : prev));
-      };
-
-      recognitionRef.current = recognition;
-      recognition.start();
-    } catch (err: any) {
-      if (permissionTimeoutRef.current) {
-        clearTimeout(permissionTimeoutRef.current);
-        permissionTimeoutRef.current = null;
-      }
-      cleanupMediaStream();
-
-      const errorName = err.name || '';
-
-      if (errorName === 'NotAllowedError' || errorName === 'PermissionDeniedError' || errorName === 'SecurityError') {
-        setVoiceState('permission_denied');
-        setErrorDetails({
-          stage: 'capture',
-          code: errorName,
-          title: 'Microphone Access Denied',
-          message: isEmbedded
-            ? 'Microphone access is restricted in this embedded preview frame or by browser security policy.'
-            : 'Microphone access was denied in your browser permissions.',
-          suggestion: isEmbedded
-            ? 'Embedded preview frames often restrict microphone access via parent iframe permissions. You can open the standalone preview URL to grant microphone access.'
-            : 'Click the lock or site settings icon in your browser address bar, set Microphone to "Allow", and click Retry.',
-          isIframeRestricted: isEmbedded,
-        });
-      } else if (errorName === 'NotFoundError' || errorName === 'DevicesNotFoundError') {
-        setVoiceState('error');
-        setErrorDetails({
-          stage: 'capture',
-          code: 'missing_microphone',
-          title: 'No Microphone Found',
-          message: 'No audio capture device was found on your system.',
-          suggestion: 'Please connect a microphone or headset and retry.',
-        });
-      } else if (errorName === 'NotReadableError' || errorName === 'TrackStartError') {
-        setVoiceState('error');
-        setErrorDetails({
-          stage: 'capture',
-          code: 'device_in_use',
-          title: 'Microphone Hardware In Use',
-          message: 'The microphone is already in use by another application or locked by your operating system.',
-          suggestion: 'Close other video or recording applications and try again.',
-        });
-      } else {
-        setVoiceState('error');
-        setErrorDetails({
-          stage: 'capture',
-          code: errorName || 'capture_error',
-          title: 'Microphone Initialization Failed',
-          message: err.message || 'Unable to access audio input device.',
-          suggestion: 'Check your system audio input settings.',
-        });
-      }
-    }
-  };
-
-  // Stop Mic explicitly
-  const handleStopMic = () => {
-    cleanupAllAudio();
-    setVoiceState('idle');
-    setVoiceTranscript('');
-  };
-
-  // Trigger Sample Response (Labelled clearly as "Try a sample response", does not claim live mic)
-  const triggerSamplePrompt = (query: string) => {
-    cleanupAllAudio();
-    setErrorDetails(null);
-    setVoiceTranscript(`" ${query} "`);
-    setVoiceState('processing');
-    handleUserSend(query);
-  };
-
-  // Sample Call Simulation Player
+  // Sample Call Simulation
   const startSampleCall = () => {
     if (simPlaying) return;
-    cleanupAllAudio();
+    stopAllVoiceSessions();
     setErrorDetails(null);
     setSimPlaying(true);
     setSimStepIndex(0);
@@ -593,11 +415,18 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
       ]);
 
       if (step.role === 'assistant') {
-        speakText(step.text, () => {
+        const utter = new SpeechSynthesisUtterance(step.text);
+        utter.onend = () => {
           simTimerRef.current = setTimeout(() => {
             playStep(index + 1);
           }, 800);
-        });
+        };
+        utter.onerror = () => {
+          simTimerRef.current = setTimeout(() => {
+            playStep(index + 1);
+          }, 1000);
+        };
+        window.speechSynthesis.speak(utter);
       } else {
         simTimerRef.current = setTimeout(() => {
           playStep(index + 1);
@@ -612,26 +441,26 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
     if (simTimerRef.current) {
       clearTimeout(simTimerRef.current);
     }
-    stopSpeaking();
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
     setSimPlaying(false);
   };
 
-  const resetChat = () => {
-    cleanupAllAudio();
-    setMessages([
-      {
-        id: 'welcome-reset',
-        role: 'assistant',
-        text: 'Hello, welcome to GNS Real Estate. Are you looking to buy, rent or explore off-plan properties?',
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        quickChoices: ['Buy a Home', 'Rent a Property', 'Explore Off-plan', 'Book a Viewing'],
-      },
-    ]);
-    setCriteria({});
-    setVoiceTranscript('');
-    setErrorDetails(null);
-    setVoiceState('idle');
+  const formatTimer = (totalSeconds: number) => {
+    const mins = Math.floor(totalSeconds / 60)
+      .toString()
+      .padStart(2, '0');
+    const secs = (totalSeconds % 60).toString().padStart(2, '0');
+    return `${mins}:${secs}`;
   };
+
+  const isCallActive =
+    callStatus === 'connected' ||
+    callStatus === 'listening' ||
+    callStatus === 'processing' ||
+    callStatus === 'speaking' ||
+    callStatus === 'interrupted';
 
   return (
     <>
@@ -654,7 +483,7 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#DEBF84] opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-[#DEBF84]"></span>
               </span>
-              <MessageSquare className="w-4 h-4 text-[#DEBF84]" />
+              <PhoneCall className="w-4 h-4 text-[#DEBF84]" />
               <span className="text-xs font-medium tracking-wide">Ask GNS</span>
               <span className="text-[10px] text-white/50 border-l border-white/20 pl-2 font-mono">
                 Voice & Chat
@@ -664,27 +493,27 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
         </button>
       </div>
 
-      {/* Assistant Flyout Window */}
+      {/* Assistant Window */}
       {isOpen && (
         <div
-          className="fixed bottom-22 right-4 sm:right-6 md:right-10 z-40 w-[94vw] sm:w-[430px] bg-[#FAF9F5] border border-[#DCD9D3] rounded-xs shadow-2xl overflow-hidden flex flex-col h-[650px] max-h-[84vh] transition-all"
+          className="fixed bottom-22 right-4 sm:right-6 md:right-10 z-40 w-[94vw] sm:w-[450px] bg-[#FAF9F5] border border-[#DCD9D3] rounded-xs shadow-2xl overflow-hidden flex flex-col h-[670px] max-h-[85vh] transition-all"
           role="dialog"
           aria-modal="true"
-          aria-label="GNS AI Receptionist Demo"
+          aria-label="GNS AI Receptionist & Voice Advisor"
         >
           {/* Header */}
-          <div className="p-4 bg-[#162E52] text-white flex items-center justify-between border-b border-white/10 shrink-0">
+          <div className="p-3.5 bg-[#162E52] text-white flex items-center justify-between border-b border-white/10 shrink-0">
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-semibold tracking-wider uppercase text-[#DEBF84]">
-                  GNS Receptionist
+                  GNS Real Estate
                 </span>
                 <span className="text-[10px] px-1.5 py-0.5 bg-white/10 rounded-xs font-mono text-white/70">
-                  Demo
+                  AI Receptionist
                 </span>
               </div>
               <p className="text-[11px] text-white/70 mt-0.5">
-                Qualified guidance & property viewings · Dubai
+                Qualified advisory, viewings & voice calls · Dubai
               </p>
             </div>
 
@@ -712,10 +541,7 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
           <div className="bg-[#F0EEE9] px-3 py-1.5 border-b border-[#E6E4DF] flex items-center justify-between text-xs shrink-0">
             <div className="flex items-center gap-1">
               <button
-                onClick={() => {
-                  cleanupAllAudio();
-                  setActiveTab('chat');
-                }}
+                onClick={() => setActiveTab('chat')}
                 className={`px-3 py-1 text-xs rounded-xs font-medium transition-colors cursor-pointer ${
                   activeTab === 'chat'
                     ? 'bg-white text-[#162E52] shadow-xs'
@@ -732,33 +558,27 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
                     : 'text-[#63605B] hover:text-[#1A1918]'
                 }`}
               >
-                <Radio className="w-3 h-3 text-[#162E52]" />
+                <PhoneCall className="w-3 h-3 text-[#162E52]" />
                 <span>Voice Agent</span>
+                {isCallActive && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-ping" />
+                )}
               </button>
             </div>
 
-            {activeTab === 'chat' ? (
+            {activeTab === 'voice' && (
               <button
-                onClick={resetChat}
-                className="text-[11px] text-[#63605B] hover:text-[#162E52] flex items-center gap-1 cursor-pointer"
-                title="Restart conversation"
-              >
-                <RotateCcw className="w-3 h-3" />
-                <span>Reset</span>
-              </button>
-            ) : (
-              <button
-                onClick={testSpeakerOutput}
+                onClick={handleTestSpeaker}
                 className="text-[11px] text-[#162E52] hover:underline flex items-center gap-1 cursor-pointer font-medium"
-                title="Verify speaker audio output"
+                title="Test speaker output"
               >
                 <Volume2 className="w-3.5 h-3.5 text-[#162E52]" />
-                <span>Test Audio</span>
+                <span>Audio Check</span>
               </button>
             )}
           </div>
 
-          {/* Tab 1: Chat Stream */}
+          {/* Tab 1: Text Chat */}
           {activeTab === 'chat' && (
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
               {messages.map((msg) => (
@@ -774,57 +594,23 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
                     }`}
                   >
                     <p>{msg.text}</p>
-                    <div className="flex items-center justify-between mt-1.5 pt-1 border-t border-black/5">
-                      <div
-                        className={`text-[9px] ${
-                          msg.role === 'user' ? 'text-white/60' : 'text-[#7A7771]'
-                        }`}
-                      >
-                        {msg.time}
-                      </div>
-
-                      {/* Read aloud button for assistant responses */}
-                      {msg.role === 'assistant' && (
-                        <button
-                          onClick={() => {
-                            if (voiceState === 'speaking' && currentlySpeakingText === msg.text) {
-                              stopSpeaking();
-                            } else {
-                              speakText(msg.text);
-                            }
-                          }}
-                          className="text-[10px] text-[#162E52] hover:text-[#22417C] flex items-center gap-1 cursor-pointer ml-3 font-mono"
-                          title="Listen to this message"
-                        >
-                          {voiceState === 'speaking' && currentlySpeakingText === msg.text ? (
-                            <>
-                              <VolumeX className="w-3 h-3 text-rose-600" />
-                              <span className="text-rose-600">Stop</span>
-                            </>
-                          ) : (
-                            <>
-                              <Volume2 className="w-3 h-3 text-[#162E52]" />
-                              <span>Listen</span>
-                            </>
-                          )}
-                        </button>
-                      )}
+                    <div className="flex items-center justify-between mt-1.5 pt-1 border-t border-black/5 text-[9px] text-[#7A7771]">
+                      <span>{msg.time}</span>
                     </div>
                   </div>
 
-                  {/* Shortlist Cards if present */}
+                  {/* Curated Shortlist */}
                   {msg.shortlist && msg.shortlist.length > 0 && (
                     <div className="mt-2.5 w-full space-y-2 max-w-[95%]">
                       <div className="text-[10px] font-semibold uppercase tracking-wider text-[#736F68] flex items-center gap-1">
                         <Sparkles className="w-3 h-3 text-[#162E52]" />
-                        <span>Curated GNS Shortlist (Preliminary)</span>
+                        <span>Curated GNS Shortlist</span>
                       </div>
-
                       <div className="space-y-2">
                         {msg.shortlist.map((prop: PropertyItem) => (
                           <div
                             key={prop.id}
-                            className="p-2.5 bg-white border border-[#E6E4DF] rounded-xs shadow-xs hover:border-[#162E52] transition-colors"
+                            className="p-2.5 bg-white border border-[#E6E4DF] rounded-xs shadow-xs"
                           >
                             <div className="flex items-start justify-between gap-2">
                               <div>
@@ -833,13 +619,10 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
                                   {prop.location} · {prop.developer}
                                 </p>
                               </div>
-                              <span className="text-[10px] font-medium text-[#162E52] bg-[#F2EFE9] px-1.5 py-0.5 rounded-xs shrink-0">
+                              <span className="text-[10px] font-medium text-[#162E52] bg-[#F2EFE9] px-1.5 py-0.5 rounded-xs">
                                 {prop.type}
                               </span>
                             </div>
-                            <p className="text-[11px] text-[#4A4742] mt-1.5 line-clamp-2">
-                              {prop.description}
-                            </p>
                             <div className="mt-2 flex items-center justify-between pt-1 border-t border-[#F2EFE9]">
                               <span className="text-[10px] text-[#63605B]">{prop.priceNote}</span>
                               <button
@@ -862,7 +645,7 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
                     </div>
                   )}
 
-                  {/* Suggest Viewing Button CTA */}
+                  {/* Suggest Viewing Button */}
                   {msg.showViewingTrigger && (
                     <div className="mt-2">
                       <button
@@ -881,7 +664,7 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
                     </div>
                   )}
 
-                  {/* Quick Choices Buttons */}
+                  {/* Quick Choices */}
                   {msg.quickChoices && msg.quickChoices.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-1.5 max-w-[90%]">
                       {msg.quickChoices.map((choice) => (
@@ -912,25 +695,34 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
             </div>
           )}
 
-          {/* Tab 2: Voice Receptionist Panel */}
+          {/* Tab 2: Full-Duplex Real-Time Voice Agent */}
           {activeTab === 'voice' && (
-            <div className="flex-1 overflow-y-auto p-4 flex flex-col justify-between space-y-3.5">
-              {/* Speaker Audio Test Success Toast */}
-              {testOutputSuccess && (
+            <div className="flex-1 overflow-y-auto p-4 flex flex-col justify-between space-y-3">
+              {/* Audio Verification Success Toast */}
+              {speakerTestSuccess && (
                 <div className="p-2.5 bg-emerald-50 border border-emerald-300 rounded-xs flex items-center gap-2 text-xs text-emerald-800 animate-fadeIn">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Audio output verified! Device speaker and speech synthesis are operational.</span>
+                  <span>Speaker verified! Real-time voice delivery is functioning properly.</span>
                 </div>
               )}
 
-              {/* Explicit Error / Permission Notice Banner */}
+              {/* Interruption Notice Pill */}
+              {interruptedNotice && (
+                <div className="p-2 bg-amber-50 border border-amber-300 rounded-xs flex items-center justify-between text-xs text-amber-900 animate-fadeIn">
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <HandMetal className="w-3.5 h-3.5 text-amber-700" />
+                    <span>Agent interrupted! Playback stopped immediately & listening to your voice.</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-amber-700">Instant Flush</span>
+                </div>
+              )}
+
+              {/* Explicit Permission / Device Notice */}
               {errorDetails && (
                 <div
                   className={`p-3 rounded-xs border text-xs space-y-1.5 ${
-                    errorDetails.stage === 'capture' || voiceState === 'permission_denied'
-                      ? 'bg-amber-50/90 border-amber-300 text-amber-950'
-                      : errorDetails.stage === 'network'
-                      ? 'bg-blue-50 border-blue-200 text-blue-950'
+                    errorDetails.stage === 'capture' || callStatus === 'permission_denied'
+                      ? 'bg-amber-50 border-amber-300 text-amber-950'
                       : 'bg-rose-50 border-rose-200 text-rose-950'
                   }`}
                 >
@@ -938,30 +730,19 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
                     <div className="flex items-center gap-1.5 font-semibold">
                       <AlertCircle className="w-4 h-4 shrink-0 text-amber-700" />
                       <span>{errorDetails.title}</span>
-                      <span className="text-[10px] uppercase font-mono px-1 py-0.2 bg-black/5 rounded-xs text-[#555]">
-                        Stage: {errorDetails.stage}
-                      </span>
                     </div>
                     <button
                       onClick={() => setErrorDetails(null)}
                       className="text-black/50 hover:text-black p-0.5"
-                      aria-label="Dismiss error"
+                      aria-label="Dismiss notice"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
-
                   <p className="text-[11px] leading-relaxed text-[#444]">{errorDetails.message}</p>
 
-                  {errorDetails.suggestion && (
-                    <p className="text-[11px] text-[#222] font-medium leading-relaxed">
-                      💡 {errorDetails.suggestion}
-                    </p>
-                  )}
-
-                  {/* Standalone preview action if running in iframe */}
                   {errorDetails.isIframeRestricted && standaloneUrl && (
-                    <div className="pt-1.5 flex items-center gap-2">
+                    <div className="pt-1 flex items-center gap-2">
                       <a
                         href={standaloneUrl}
                         target="_blank"
@@ -971,259 +752,265 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
                         <span>Open Standalone Preview</span>
                         <ExternalLink className="w-3 h-3" />
                       </a>
-                      <span className="text-[10px] text-amber-900/80">
-                        (Allows direct browser microphone prompt)
-                      </span>
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Central Voice Call Console - Strictly driven by voiceState */}
-              <div className="py-4 px-4 flex flex-col items-center justify-center space-y-3 bg-white border border-[#E6E4DF] rounded-xs shadow-xs">
-                {/* Voice Status Pill - Never shows contradictory "Ready" when blocked */}
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 border rounded-full text-[10px] font-mono transition-colors ${
-                      voiceState === 'requesting_permission'
-                        ? 'bg-amber-50 border-amber-300 text-amber-800'
-                        : voiceState === 'listening'
-                        ? 'bg-rose-50 border-rose-300 text-rose-800'
-                        : voiceState === 'processing'
-                        ? 'bg-blue-50 border-blue-300 text-blue-800'
-                        : voiceState === 'speaking'
-                        ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
-                        : voiceState === 'permission_denied'
-                        ? 'bg-amber-100/70 border-amber-400 text-amber-900 font-semibold'
-                        : voiceState === 'unsupported' || voiceState === 'error'
-                        ? 'bg-rose-100/70 border-rose-300 text-rose-900'
-                        : 'bg-[#FAF9F5] border-[#E6E4DF] text-[#736F68]'
-                    }`}
-                  >
+              {/* Main Call Deck */}
+              <div className="bg-white border border-[#E6E4DF] rounded-xs p-4 shadow-xs space-y-3">
+                {/* Call Header / Status / Timer */}
+                <div className="flex items-center justify-between border-b border-[#F0EEE9] pb-3">
+                  <div className="flex items-center gap-2">
                     <span
-                      className={`w-1.5 h-1.5 rounded-full ${
-                        voiceState === 'requesting_permission'
-                          ? 'bg-amber-500 animate-spin'
-                          : voiceState === 'listening'
+                      className={`w-2.5 h-2.5 rounded-full ${
+                        callStatus === 'speaking'
+                          ? 'bg-emerald-500 animate-pulse'
+                          : callStatus === 'listening'
                           ? 'bg-rose-500 animate-ping'
-                          : voiceState === 'processing'
-                          ? 'bg-blue-600 animate-pulse'
-                          : voiceState === 'speaking'
-                          ? 'bg-emerald-600 animate-pulse'
-                          : voiceState === 'permission_denied'
-                          ? 'bg-amber-600'
-                          : voiceState === 'unsupported' || voiceState === 'error'
-                          ? 'bg-rose-600'
-                          : 'bg-[#162E52]'
+                          : callStatus === 'processing'
+                          ? 'bg-blue-500 animate-spin'
+                          : callStatus === 'interrupted'
+                          ? 'bg-amber-500'
+                          : isCallActive
+                          ? 'bg-emerald-600'
+                          : 'bg-[#999]'
                       }`}
                     />
-                    {voiceState === 'requesting_permission' && 'Requesting Microphone Permission...'}
-                    {voiceState === 'listening' && 'Listening to Microphone'}
-                    {voiceState === 'processing' && 'Processing Speech Query...'}
-                    {voiceState === 'speaking' && 'Receptionist Speaking'}
-                    {voiceState === 'permission_denied' && 'Microphone Permission Blocked'}
-                    {voiceState === 'unsupported' && 'Voice Recognition Unsupported'}
-                    {voiceState === 'error' && 'Voice Engine Error'}
-                    {voiceState === 'idle' && (simPlaying ? 'Simulation Playing' : 'Voice Assistant Ready')}
-                  </span>
-                </div>
-
-                {/* Animated Equalizer Waveform & Pulse Circle */}
-                <div className="relative flex flex-col items-center justify-center my-1">
-                  <div
-                    className={`w-16 h-16 rounded-full flex items-center justify-center transition-all duration-300 ${
-                      voiceState === 'requesting_permission'
-                        ? 'bg-amber-100/50 border-2 border-amber-500 animate-pulse'
-                        : voiceState === 'listening'
-                        ? 'bg-rose-100 border-2 border-rose-500 shadow-md ring-4 ring-rose-50'
-                        : voiceState === 'processing'
-                        ? 'bg-blue-100 border-2 border-blue-500 animate-pulse'
-                        : voiceState === 'speaking' || simPlaying
-                        ? 'bg-[#162E52]/10 border-2 border-[#162E52] ring-4 ring-[#162E52]/10'
-                        : voiceState === 'permission_denied'
-                        ? 'bg-amber-50 border-2 border-amber-400 text-amber-700'
-                        : 'bg-[#F0EEE9] border border-[#DCD9D3]'
-                    }`}
-                  >
-                    {voiceState === 'requesting_permission' ? (
-                      <RefreshCw className="w-7 h-7 text-amber-700 animate-spin" />
-                    ) : voiceState === 'listening' ? (
-                      <Mic className="w-7 h-7 text-rose-600 animate-pulse" />
-                    ) : voiceState === 'processing' ? (
-                      <Sparkles className="w-7 h-7 text-blue-700 animate-spin" />
-                    ) : voiceState === 'speaking' || simPlaying ? (
-                      <Volume2 className="w-7 h-7 text-[#162E52] animate-bounce" />
-                    ) : voiceState === 'permission_denied' ? (
-                      <MicOff className="w-7 h-7 text-amber-700" />
-                    ) : (
-                      <Mic className="w-7 h-7 text-[#162E52]" />
-                    )}
+                    <div>
+                      <span className="text-xs font-semibold text-[#1A1918] block">
+                        {callStatus === 'requesting_permission' && 'Requesting Mic Access...'}
+                        {callStatus === 'listening' && 'Listening hands-free...'}
+                        {callStatus === 'processing' && 'Thinking & consulting inventory...'}
+                        {callStatus === 'speaking' && 'Advisor Speaking (Interruptible)'}
+                        {callStatus === 'interrupted' && 'Interrupted — Listening to you'}
+                        {callStatus === 'permission_denied' && 'Microphone Access Denied'}
+                        {callStatus === 'error' && 'Voice Session Error'}
+                        {callStatus === 'idle' && 'Voice Advisory Ready'}
+                        {callStatus === 'ended' && 'Call Completed'}
+                      </span>
+                      <span className="text-[10px] text-[#736F68]">
+                        South Asian / Indian English · Full Duplex
+                      </span>
+                    </div>
                   </div>
 
-                  {/* 5-Bar Equalizer animation during active sound */}
-                  {(voiceState === 'listening' || voiceState === 'speaking' || simPlaying) && (
-                    <div className="flex items-center gap-1 mt-2.5 h-5">
-                      <span className="w-1 bg-[#162E52] rounded-full animate-[pulse_0.6s_ease-in-out_infinite] h-4" />
-                      <span className="w-1 bg-[#162E52] rounded-full animate-[pulse_0.4s_ease-in-out_infinite_0.1s] h-5" />
-                      <span className="w-1 bg-[#DEBF84] rounded-full animate-[pulse_0.7s_ease-in-out_infinite_0.2s] h-3" />
-                      <span className="w-1 bg-[#162E52] rounded-full animate-[pulse_0.5s_ease-in-out_infinite_0.15s] h-5" />
-                      <span className="w-1 bg-[#162E52] rounded-full animate-[pulse_0.6s_ease-in-out_infinite_0.25s] h-4" />
+                  {isCallActive && (
+                    <div className="text-right">
+                      <span className="text-xs font-mono font-semibold text-[#162E52] bg-[#F2EFE9] px-2 py-0.5 rounded-xs">
+                        {formatTimer(callDuration)}
+                      </span>
+                      <span className="block text-[9px] text-[#736F68] mt-0.5">Live Call</span>
                     </div>
                   )}
                 </div>
 
-                {/* Subtitle / Status Explanation */}
-                <div className="text-center space-y-1 w-full max-w-xs">
-                  <div className="text-xs font-semibold text-[#1A1918]">
-                    {voiceState === 'requesting_permission' && 'Please grant microphone access in your browser...'}
-                    {voiceState === 'listening' && 'Listening to your voice... Speak now'}
-                    {voiceState === 'processing' && 'Analyzing requirements with GNS portfolio...'}
-                    {voiceState === 'speaking' && 'Playing spoken response...'}
-                    {voiceState === 'permission_denied' && 'Microphone access is unavailable.'}
-                    {voiceState === 'unsupported' && 'Voice recognition is not supported in this browser.'}
-                    {voiceState === 'error' && 'Voice interaction stopped due to an error.'}
-                    {voiceState === 'idle' && (simPlaying ? `Simulating Buyer Call (${simStepIndex + 1}/${SAMPLE_CALL_STEPS.length})` : 'Speak via Mic or try a sample response')}
-                  </div>
-
-                  {/* Dynamic Transcript Area - NEVER shows "Connecting..." when blocked */}
-                  <div className="p-2 bg-[#FAF9F5] border border-[#E6E4DF] rounded-xs text-[11px] text-[#4A4742] min-h-[38px] flex items-center justify-center text-center">
-                    {voiceState === 'requesting_permission' ? (
-                      <span className="text-amber-700 italic">Waiting for microphone permission approval...</span>
-                    ) : voiceState === 'listening' ? (
-                      <span className="text-rose-700 font-medium">{voiceTranscript || 'Listening... Speak clearly into your mic'}</span>
-                    ) : voiceState === 'processing' ? (
-                      <span className="text-blue-700 italic">{voiceTranscript || 'Evaluating current property listings...'}</span>
-                    ) : voiceState === 'permission_denied' ? (
-                      <span className="text-amber-800 text-[10px]">Permission blocked. Use typed chat or try a sample response below.</span>
-                    ) : voiceTranscript ? (
-                      <span className="italic">{voiceTranscript}</span>
-                    ) : (
-                      <span className="text-[#736F68] italic">“Ask about 2-bed in Creek Harbour, Town Square villas, or viewings...”</span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Microphone Action Buttons */}
-                <div className="flex items-center gap-2 pt-1">
-                  {voiceState === 'listening' ? (
-                    <>
-                      <button
-                        onClick={handleStopMic}
-                        className="px-4 py-2 text-xs font-medium rounded-xs flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs bg-rose-600 text-white hover:bg-rose-700"
-                      >
-                        <MicOff className="w-3.5 h-3.5" />
-                        <span>Stop Mic</span>
-                      </button>
-
-                      {voiceTranscript.trim() && (
-                        <button
-                          onClick={() => {
-                            const captured = voiceTranscript.trim();
-                            cleanupMediaStream();
-                            try {
-                              recognitionRef.current?.stop();
-                            } catch {}
-                            setVoiceState('processing');
-                            handleUserSend(captured);
-                          }}
-                          className="px-3 py-2 text-xs bg-emerald-700 text-white rounded-xs hover:bg-emerald-800 transition-colors flex items-center gap-1 cursor-pointer shadow-xs"
-                          title="Send captured voice query"
-                        >
-                          <Send className="w-3 h-3" />
-                          <span>Send Now</span>
-                        </button>
-                      )}
-                    </>
-                  ) : voiceState === 'requesting_permission' ? (
-                    <button
-                      disabled
-                      className="px-4 py-2 text-xs font-medium rounded-xs flex items-center gap-1.5 bg-[#162E52]/70 text-white opacity-80 cursor-wait shadow-xs"
-                    >
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Requesting Access...</span>
-                    </button>
-                  ) : voiceState === 'permission_denied' ? (
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={handleStartMic}
-                        className="px-3.5 py-2 text-xs font-medium rounded-xs flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs bg-[#162E52] text-white hover:bg-[#22417C]"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        <span>Retry Permission</span>
-                      </button>
-
-                      <button
-                        onClick={() => {
-                          cleanupAllAudio();
-                          setActiveTab('chat');
-                        }}
-                        className="px-3 py-2 text-xs border border-[#DCD9D3] text-[#1A1918] bg-white hover:bg-[#F2EFE9] rounded-xs cursor-pointer transition-colors"
-                      >
-                        <span>Use Typed Chat</span>
-                      </button>
+                {/* Animated Waveform & Energy Visualizers */}
+                {isCallActive && (
+                  <div className="bg-[#FAF9F5] border border-[#E6E4DF] p-2.5 rounded-xs space-y-2">
+                    <div className="flex items-center justify-between text-[10px] text-[#736F68]">
+                      <span>Microphone Input (You)</span>
+                      <div className="flex items-center gap-1 h-3">
+                        {[0.2, 0.4, 0.6, 0.8, 1.0].map((step, idx) => (
+                          <span
+                            key={idx}
+                            className={`w-1 rounded-full transition-all duration-75 ${
+                              inputAudioLevel >= step
+                                ? 'bg-rose-600 h-3'
+                                : 'bg-neutral-300 h-1.5'
+                            }`}
+                          />
+                        ))}
+                      </div>
                     </div>
-                  ) : voiceState === 'speaking' ? (
+
+                    <div className="flex items-center justify-between text-[10px] text-[#736F68]">
+                      <span>Advisor Voice (Output)</span>
+                      <div className="flex items-center gap-1 h-3">
+                        {[0.2, 0.4, 0.6, 0.8, 1.0].map((step, idx) => (
+                          <span
+                            key={idx}
+                            className={`w-1 rounded-full transition-all duration-75 ${
+                              outputAudioLevel >= step
+                                ? 'bg-[#162E52] h-3'
+                                : 'bg-neutral-300 h-1.5'
+                            }`}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Call Action Controls */}
+                <div className="flex items-center justify-center gap-2 pt-1">
+                  {!isCallActive ? (
                     <button
-                      onClick={stopSpeaking}
-                      className="px-4 py-2 text-xs border border-rose-300 text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-xs flex items-center gap-1 cursor-pointer shadow-xs"
+                      onClick={handleStartCall}
+                      className="w-full py-2.5 px-4 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xs text-xs font-medium flex items-center justify-center gap-2 shadow-xs transition-colors cursor-pointer"
                     >
-                      <VolumeX className="w-3.5 h-3.5" />
-                      <span>Stop Audio</span>
+                      <PhoneCall className="w-4 h-4" />
+                      <span>Start Hands-Free Voice Call</span>
                     </button>
                   ) : (
-                    <button
-                      onClick={handleStartMic}
-                      disabled={voiceState === 'processing'}
-                      className="px-4 py-2 text-xs font-medium rounded-xs flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs bg-[#162E52] text-white hover:bg-[#22417C] disabled:opacity-50"
-                    >
-                      <Mic className="w-3.5 h-3.5" />
-                      <span>Start Mic</span>
-                    </button>
+                    <>
+                      <button
+                        onClick={handleToggleMute}
+                        className={`px-3 py-2 text-xs rounded-xs font-medium flex items-center gap-1.5 border transition-colors cursor-pointer ${
+                          isMuted
+                            ? 'bg-amber-100 border-amber-300 text-amber-900'
+                            : 'bg-white border-[#DCD9D3] text-[#1A1918] hover:bg-[#F2EFE9]'
+                        }`}
+                        title={isMuted ? 'Unmute microphone' : 'Mute microphone'}
+                      >
+                        {isMuted ? <MicOff className="w-3.5 h-3.5 text-amber-700" /> : <Mic className="w-3.5 h-3.5" />}
+                        <span>{isMuted ? 'Muted' : 'Mute'}</span>
+                      </button>
+
+                      {callStatus === 'speaking' && (
+                        <button
+                          onClick={handleInterruptAgent}
+                          className="px-3 py-2 text-xs bg-amber-600 hover:bg-amber-700 text-white rounded-xs font-medium flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer animate-pulse"
+                          title="Interrupt the agent immediately"
+                        >
+                          <HandMetal className="w-3.5 h-3.5" />
+                          <span>Interrupt & Speak</span>
+                        </button>
+                      )}
+
+                      <button
+                        onClick={handleEndCall}
+                        className="px-4 py-2 text-xs bg-rose-600 hover:bg-rose-700 text-white rounded-xs font-medium flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                      >
+                        <PhoneOff className="w-3.5 h-3.5" />
+                        <span>End Call</span>
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
 
-              {/* Sample Responses Section (Accurately labelled: tests response synthesis, does not claim live mic) */}
+              {/* Live Spoken Call Transcript */}
+              {isCallActive && (
+                <div className="flex-1 bg-white border border-[#E6E4DF] rounded-xs p-3 overflow-y-auto max-h-48 space-y-2 text-xs">
+                  <div className="text-[10px] uppercase font-mono tracking-wider text-[#736F68] border-b border-[#F0EEE9] pb-1">
+                    Live Call Transcript
+                  </div>
+
+                  {callMessages.length === 0 && !interimTranscript && (
+                    <p className="text-[11px] text-[#736F68] italic">
+                      Advisor connected. Speak naturally into your microphone...
+                    </p>
+                  )}
+
+                  {callMessages.map((msg) => (
+                    <div
+                      key={msg.id}
+                      className={`p-2 rounded-xs text-[11px] leading-relaxed ${
+                        msg.role === 'assistant'
+                          ? 'bg-[#FAF9F5] border-l-2 border-[#162E52]'
+                          : 'bg-blue-50/60 border-l-2 border-blue-600'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between text-[9px] text-[#736F68] mb-0.5">
+                        <strong className={msg.role === 'assistant' ? 'text-[#162E52]' : 'text-blue-900'}>
+                          {msg.role === 'assistant' ? 'GNS Advisor' : 'You'}
+                        </strong>
+                        <span>{msg.time}</span>
+                      </div>
+                      <p className="text-[#2A2928]">{msg.text}</p>
+                    </div>
+                  ))}
+
+                  {/* Real-time Interim User Utterance */}
+                  {interimTranscript && (
+                    <div className="p-2 rounded-xs bg-blue-50/30 border-l-2 border-dashed border-blue-400 text-[11px] text-[#444] animate-pulse">
+                      <span className="text-[9px] text-blue-700 block font-semibold">You (speaking...):</span>
+                      <span>{interimTranscript}</span>
+                    </div>
+                  )}
+
+                  <div ref={callEndRef} />
+                </div>
+              )}
+
+              {/* Matched Property Cards inside Voice Call */}
+              {suggestedProperties.length > 0 && (
+                <div className="bg-[#FAF9F5] border border-[#DEBF84]/60 p-2.5 rounded-xs space-y-1.5">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-[#162E52] flex items-center gap-1">
+                    <Sparkles className="w-3 h-3 text-[#DEBF84]" />
+                    <span>Discussed Properties</span>
+                  </span>
+                  <div className="space-y-1.5">
+                    {suggestedProperties.map((prop) => (
+                      <div
+                        key={prop.id}
+                        className="bg-white p-2 border border-[#E6E4DF] rounded-xs flex items-center justify-between text-xs"
+                      >
+                        <div>
+                          <div className="font-semibold text-[#1A1918]">{prop.title}</div>
+                          <div className="text-[10px] text-[#736F68]">{prop.location}</div>
+                        </div>
+                        <button
+                          onClick={() =>
+                            openViewingModal({
+                              id: prop.id,
+                              title: prop.title,
+                              location: prop.location,
+                            })
+                          }
+                          className="px-2 py-1 text-[10px] bg-[#162E52] text-white hover:bg-[#22417C] rounded-xs flex items-center gap-1 cursor-pointer"
+                        >
+                          <Calendar className="w-3 h-3" />
+                          <span>Book Viewing</span>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 1-Click Interactive Test Scenarios (Never stuck even if mic blocked) */}
               <div className="p-3 bg-white border border-[#E6E4DF] rounded-xs space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-[#1A1918] flex items-center gap-1">
                     <Radio className="w-3.5 h-3.5 text-[#162E52]" />
-                    <span>Sample Responses (Audio Output Test)</span>
+                    <span>Instant Voice Queries & Scenarios</span>
                   </span>
                   <span className="text-[10px] text-[#162E52] bg-[#F2EFE9] border border-[#DCD9D3] px-1.5 py-0.5 rounded-xs font-mono">
-                    Try a sample response
+                    1-Click Test
                   </span>
                 </div>
                 <p className="text-[11px] text-[#736F68] leading-relaxed">
-                  Test how the AI receptionist formats Dubai property recommendations and speaks responses. These samples verify response logic and speech synthesis (they do not test your microphone hardware or place phone calls).
+                  Test property queries, bilingual Urdu/Hindi code-switching, and instant mid-sentence interruption without requiring external audio hardware.
                 </p>
 
-                <div className="flex flex-wrap gap-1.5 pt-1">
-                  {SAMPLE_RESPONSES.map((prompt) => (
+                <div className="grid grid-cols-1 gap-1.5 pt-1">
+                  {ONE_CLICK_TESTS.map((test) => (
                     <button
-                      key={prompt.label}
-                      onClick={() => triggerSamplePrompt(prompt.query)}
-                      className="px-2.5 py-1.5 text-[11px] text-left bg-[#FAF9F5] border border-[#DCD9D3] hover:border-[#162E52] hover:bg-[#F2EFE9] text-[#1A1918] rounded-xs transition-colors flex items-center gap-1.5 cursor-pointer group"
+                      key={test.label}
+                      onClick={() => triggerOneClickTest(test.query)}
+                      className="px-2.5 py-1.5 text-[11px] text-left bg-[#FAF9F5] border border-[#DCD9D3] hover:border-[#162E52] hover:bg-[#F2EFE9] text-[#1A1918] rounded-xs transition-colors flex items-center justify-between cursor-pointer group"
                     >
-                      <Volume2 className="w-3 h-3 text-[#162E52] group-hover:scale-110 transition-transform" />
-                      <span>{prompt.label}</span>
+                      <div className="flex items-center gap-1.5">
+                        <Volume2 className="w-3 h-3 text-[#162E52] shrink-0 group-hover:scale-110 transition-transform" />
+                        <span className="font-medium">{test.label}</span>
+                      </div>
+                      <span className="text-[10px] text-[#736F68] font-mono">{test.desc}</span>
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* Interactive Fictional Buyer Call Simulation */}
+              {/* Scripted Simulation */}
               <div className="p-3 bg-[#F0EEE9] border border-[#E6E4DF] rounded-xs space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-[#1A1918] flex items-center gap-1">
                     <PhoneCall className="w-3.5 h-3.5 text-[#162E52]" />
-                    <span>Sample Buyer Call Simulation (Sarah Jenkins)</span>
+                    <span>Full Scripted Phone Call Simulation</span>
                   </span>
-                  <span className="text-[10px] text-[#736F68] font-mono">2-Bed Creek Call</span>
+                  <span className="text-[10px] text-[#736F68] font-mono">Buyer Call</span>
                 </div>
-                <p className="text-[11px] text-[#63605B]">
-                  Hear a full scripted phone interaction demonstrating qualification, unit suggestions, and slot scheduling.
-                </p>
 
                 <div className="flex items-center gap-2 pt-1">
                   {simPlaying ? (
@@ -1240,22 +1027,24 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
                       className="px-3 py-1.5 text-xs bg-[#162E52] text-white rounded-xs flex items-center gap-1 cursor-pointer hover:bg-[#22417C]"
                     >
                       <Play className="w-3.5 h-3.5" />
-                      <span>Play Full Simulation</span>
+                      <span>Play Sarah Jenkins Call</span>
                     </button>
                   )}
                 </div>
 
                 {simTranscript.length > 0 && (
-                  <div className="mt-2 p-2 bg-white border border-[#DCD9D3] rounded-xs max-h-36 overflow-y-auto space-y-1.5 text-[11px]">
+                  <div className="mt-2 p-2 bg-white border border-[#DCD9D3] rounded-xs max-h-32 overflow-y-auto space-y-1.5 text-[11px]">
                     {simTranscript.map((st, idx) => (
                       <div
                         key={idx}
                         className={`p-1.5 rounded-xs leading-snug ${
-                          st.role === 'assistant' ? 'bg-[#FAF9F5] border-l-2 border-[#162E52]' : 'bg-blue-50/50'
+                          st.role === 'assistant'
+                            ? 'bg-[#FAF9F5] border-l-2 border-[#162E52]'
+                            : 'bg-blue-50/50'
                         }`}
                       >
                         <strong className={st.role === 'user' ? 'text-blue-900' : 'text-[#162E52]'}>
-                          {st.role === 'user' ? 'Buyer (Sarah): ' : 'GNS AI: '}
+                          {st.role === 'user' ? 'Buyer (Sarah): ' : 'GNS Advisor: '}
                         </strong>
                         <span className="text-[#3A3834]">{st.text}</span>
                       </div>
@@ -1266,7 +1055,7 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
             </div>
           )}
 
-          {/* Chat Input Bar */}
+          {/* Bottom Chat Input Bar */}
           {activeTab === 'chat' && (
             <div className="p-3 bg-[#FAF9F5] border-t border-[#E6E4DF] shrink-0">
               <form
@@ -1287,12 +1076,12 @@ export const EnquiryAssistant: React.FC<EnquiryAssistantProps> = ({ isOpen, onTo
                   type="button"
                   onClick={() => {
                     setActiveTab('voice');
-                    handleStartMic();
+                    handleStartCall();
                   }}
                   className="p-2 border border-[#DCD9D3] bg-white text-[#63605B] hover:text-[#162E52] rounded-xs cursor-pointer transition-colors"
-                  title="Voice input (switch to voice tab)"
+                  title="Switch to Voice Call"
                 >
-                  <Mic className="w-4 h-4" />
+                  <PhoneCall className="w-4 h-4" />
                 </button>
                 <button
                   type="submit"
