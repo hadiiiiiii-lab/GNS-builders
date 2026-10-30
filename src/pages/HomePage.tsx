@@ -2,18 +2,20 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, ArrowRight } from 'lucide-react';
 import { Hero } from '../components/Hero';
-import { PROPERTIES, VERIFIED_TEAM } from '../data/gnsData';
+import { VERIFIED_TEAM } from '../data/gnsData';
+import { useDemoContext } from '../context/DemoContext';
 
 export const HomePage: React.FC = () => {
+  const { properties } = useDemoContext();
   // Exactly 3 curated featured properties
-  const featuredProperties = PROPERTIES.slice(0, 3);
+  const featuredProperties = properties.slice(0, 3);
 
   // Key advisors for concise team introduction
   const featuredAdvisors = VERIFIED_TEAM.slice(0, 2);
 
   return (
-    <div className="flex flex-col bg-[#FAF9F5] text-[#1E1D1B] overflow-hidden">
-      {/* 1. Header + Cinematic Video Hero */}
+    <div className="flex flex-col bg-[#FAF9F5] text-[#1A1918] overflow-hidden">
+      {/* 1. Balanced Desktop Hero: Left copy & CTA, Right 3D Architectural Scale Model */}
       <Hero />
 
       {/* 2. Short Editorial Introduction */}
@@ -26,7 +28,7 @@ export const HomePage: React.FC = () => {
                 GNS Real Estate · Dubai
               </span>
 
-              <h2 className="text-3xl sm:text-4xl md:text-[46px] font-normal text-[#1A1918] font-editorial leading-[1.14] text-balance">
+              <h2 className="text-3xl sm:text-4xl md:text-[44px] font-medium text-[#1A1918] font-heading leading-[1.15] text-balance">
                 Property decisions, thoughtfully guided.
               </h2>
 
@@ -83,7 +85,7 @@ export const HomePage: React.FC = () => {
                 Residential
               </span>
 
-              <h2 className="text-3xl sm:text-4xl md:text-[44px] font-normal text-[#1A1918] font-editorial leading-[1.14] text-balance">
+              <h2 className="text-3xl sm:text-4xl md:text-[42px] font-medium text-[#1A1918] font-heading leading-[1.15] text-balance">
                 Spaces to call home.
               </h2>
 
@@ -111,7 +113,7 @@ export const HomePage: React.FC = () => {
                 Off-Plan & Growth
               </span>
 
-              <h2 className="text-3xl sm:text-4xl md:text-[44px] font-normal text-[#1A1918] font-editorial leading-[1.14] text-balance">
+              <h2 className="text-3xl sm:text-4xl md:text-[42px] font-medium text-[#1A1918] font-heading leading-[1.15] text-balance">
                 Explore what’s next.
               </h2>
 
@@ -154,7 +156,7 @@ export const HomePage: React.FC = () => {
               <span className="text-[11px] font-medium tracking-[0.2em] uppercase text-[#736F68] block mb-2">
                 Selected Work
               </span>
-              <h2 className="text-3xl sm:text-4xl md:text-[44px] font-normal text-[#1A1918] font-editorial">
+              <h2 className="text-3xl sm:text-4xl md:text-[42px] font-medium text-[#1A1918] font-heading">
                 Featured Properties
               </h2>
             </div>
@@ -162,7 +164,7 @@ export const HomePage: React.FC = () => {
               to="/properties"
               className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#162E52] hover:text-[#22417C] transition-colors"
             >
-              <span>View All Properties ({PROPERTIES.length})</span>
+              <span>View All Properties ({properties.length})</span>
               <ArrowUpRight className="w-4 h-4" />
             </Link>
           </div>
@@ -190,7 +192,7 @@ export const HomePage: React.FC = () => {
                     {property.location}
                   </p>
 
-                  <h3 className="text-xl font-editorial font-normal text-[#1A1918] group-hover:text-[#162E52] transition-colors">
+                  <h3 className="text-lg sm:text-xl font-heading font-medium text-[#1A1918] group-hover:text-[#162E52] transition-colors">
                     <Link to={`/properties/${property.slug}`}>
                       {property.title}
                     </Link>
@@ -222,7 +224,7 @@ export const HomePage: React.FC = () => {
                 The Company
               </span>
 
-              <h2 className="text-3xl sm:text-4xl md:text-[44px] font-normal text-[#1A1918] font-editorial leading-[1.14]">
+              <h2 className="text-3xl sm:text-4xl md:text-[42px] font-medium text-[#1A1918] font-heading leading-[1.15]">
                 Meet GNS Real Estate
               </h2>
 
@@ -255,7 +257,7 @@ export const HomePage: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <h3 className="text-base font-editorial font-normal text-[#1A1918]">
+                      <h3 className="text-base font-heading font-medium text-[#1A1918]">
                         {member.name}
                       </h3>
                       <p className="text-[11px] text-[#7A7771] uppercase tracking-wider">
@@ -274,7 +276,7 @@ export const HomePage: React.FC = () => {
       <section className="py-24 md:py-32 bg-[#162E52] text-white">
         <div className="max-w-[1440px] mx-auto px-6 sm:px-12 lg:px-24">
           <div className="max-w-2xl space-y-6">
-            <h2 className="text-3xl sm:text-4xl md:text-5xl font-editorial font-normal text-white leading-[1.12] text-balance">
+            <h2 className="text-3xl sm:text-4xl md:text-5xl font-heading font-medium text-white leading-[1.12] text-balance">
               Your next move starts with a conversation.
             </h2>
 
@@ -287,7 +289,7 @@ export const HomePage: React.FC = () => {
                 to="/contact"
                 className="inline-flex items-center gap-2 px-8 py-4 text-xs font-semibold uppercase tracking-wider text-[#162E52] bg-[#FAF9F5] hover:bg-white rounded-xs shadow-md transition-colors"
               >
-                <span>Speak with an Advisor</span>
+                <span>Get in touch</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </Link>
             </div>

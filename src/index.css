@@ -2,25 +2,29 @@
 
 @layer base {
   :root {
-    --font-serif: 'Cormorant Garamond', Garamond, Georgia, serif;
-    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-heading: 'Manrope', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   }
 
   body {
     font-family: var(--font-sans);
     background-color: #FAF9F5;
-    color: #1E1D1B;
+    color: #1A1918;
     overflow-x: hidden;
+    font-size: 16px;
+    line-height: 1.65;
   }
 
-  h1, h2, h3, .font-editorial {
-    font-family: var(--font-serif);
+  h1, h2, h3, h4, .font-editorial, .font-heading {
+    font-family: var(--font-heading);
+    font-weight: 500;
+    letter-spacing: -0.02em;
   }
 }
 
-/* Custom editorial transitions & image hover */
+/* Restrained transitions */
 .img-editorial {
-  transition: transform 0.85s cubic-bezier(0.16, 1, 0.3, 1), filter 0.85s ease;
+  transition: transform 0.75s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .img-editorial:hover {
@@ -32,7 +36,60 @@
   border-color: rgba(220, 217, 211, 0.7);
 }
 
-/* Custom scrollbar for preview */
+/* Architectural Drawing Transition Keyframes */
+@keyframes drawStroke {
+  0% {
+    stroke-dashoffset: 1000;
+    opacity: 0.2;
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
+.animate-draw-foundation {
+  stroke-dasharray: 400;
+  stroke-dashoffset: 400;
+  animation: drawStroke 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-draw-structure {
+  stroke-dasharray: 600;
+  stroke-dashoffset: 600;
+  animation: drawStroke 0.45s cubic-bezier(0.16, 1, 0.3, 1) 0.15s forwards;
+}
+
+.animate-draw-roof {
+  stroke-dasharray: 400;
+  stroke-dashoffset: 400;
+  animation: drawStroke 0.35s cubic-bezier(0.16, 1, 0.3, 1) 0.32s forwards;
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .animate-draw-foundation,
+  .animate-draw-structure,
+  .animate-draw-roof {
+    stroke-dashoffset: 0 !important;
+    animation: none !important;
+    opacity: 1 !important;
+  }
+  .img-editorial:hover {
+    transform: none !important;
+  }
+}
+
+/* Clean minimal scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;

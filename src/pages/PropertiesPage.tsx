@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { MapPin, ArrowUpRight } from 'lucide-react';
-import { PROPERTIES, PropertyItem } from '../data/gnsData';
+import { PropertyItem } from '../data/gnsData';
+import { useDemoContext } from '../context/DemoContext';
 
 export const PropertiesPage: React.FC = () => {
+  const { properties } = useDemoContext();
   const [searchParams, setSearchParams] = useSearchParams();
   const categoryParam = searchParams.get('category') as 'All' | 'Apartments' | 'Villas & Townhouses' | 'Off-plan' | null;
   const [selectedFilter, setSelectedFilter] = useState<'All' | 'Apartments' | 'Villas & Townhouses' | 'Off-plan'>(
@@ -33,8 +35,8 @@ export const PropertiesPage: React.FC = () => {
   };
 
   const filtered = selectedFilter === 'All'
-    ? PROPERTIES
-    : PROPERTIES.filter((p) => p.category === selectedFilter);
+    ? properties
+    : properties.filter((p) => p.category === selectedFilter);
 
   return (
     <div className="py-16 md:py-24 bg-[#FAF9F5]">
